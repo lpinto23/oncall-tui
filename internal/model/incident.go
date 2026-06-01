@@ -8,4 +8,5 @@ type Incident struct {
 	StartTime   *time.Time
 	EndTime     *time.Time
 	Tags        []string
+	Resolution  string
 }

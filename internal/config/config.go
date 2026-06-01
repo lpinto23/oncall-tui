@@ -12,7 +12,10 @@ type Config struct {
 }
 
 func defaultConfig() Config {
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		home = os.TempDir()
+	}
 	return Config{
 		OutputDir: filepath.Join(home, "oncall-incidents"),
 	}
