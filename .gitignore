@@ -1,0 +1,28 @@
+# Binary
+oncall-tui
+
+# Build output
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test artifacts
+*.test
+*.out
+coverage.html
+coverage.txt
+
+# VHS tape source (output GIFs are committed for GitHub rendering)
+docs/screenshots/*.tape
+
+# macOS
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
