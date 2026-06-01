@@ -16,18 +16,18 @@ import (
 )
 
 func main() {
-	cfg, err := config.Load()
+	cfg, isFirstRun, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "config error: %v\n", err)
 		os.Exit(1)
 	}
 
-	onSubmit := func(answers [5]string) (string, error) {
+	onSubmit := func(outputDir string, answers [5]string) (string, error) {
 		startTime, err := ui.ParseTime(answers[2])
 		if err != nil {
 			return "", fmt.Errorf("start time: %w", err)
 		}
-		endTime, err := ui.ParseTime(answers[3])
+		endTime, err := ui.ParseEndTime(answers[3])
 		if err != nil {
 			return "", fmt.Errorf("end time: %w", err)
 		}
@@ -47,10 +47,10 @@ func main() {
 			return "", fmt.Errorf("claude enrichment: %w", err)
 		}
 
-		return writeIncident(cfg.OutputDir, inc, content)
+		return writeIncident(outputDir, inc, content)
 	}
 
-	tui := ui.New(onSubmit)
+	tui := ui.New(cfg, isFirstRun, onSubmit)
 	p := tea.NewProgram(tui, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -94,6 +94,8 @@ func writeIncident(outputDir string, inc model.Incident, enrichedContent string)
 	}
 	if inc.EndTime != nil {
 		sb.WriteString(fmt.Sprintf("**End:** %s\n", inc.EndTime.Format("2006-01-02 15:04:05 MST")))
+	} else {
+		sb.WriteString("**End:** Still open\n")
 	}
 	if len(inc.Tags) > 0 {
 		sb.WriteString(fmt.Sprintf("**Tags:** %s\n", strings.Join(inc.Tags, ", ")))

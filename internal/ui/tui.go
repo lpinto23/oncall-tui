@@ -9,12 +9,14 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/lpinto23/oncall-tui/internal/config"
 )
 
 type step int
 
 const (
-	stepIncidentID step = iota
+	stepSetup step = iota
+	stepIncidentID
 	stepSummary
 	stepStartTime
 	stepEndTime
@@ -67,12 +69,14 @@ type SubmitResult struct {
 }
 
 type Model struct {
-	step      step
-	inputs    [5]textinput.Model
-	spinner   spinner.Model
-	result    SubmitResult
-	onSubmit  func(answers [5]string) (string, error)
-	width     int
+	step       step
+	setupInput textinput.Model
+	inputs     [5]textinput.Model
+	spinner    spinner.Model
+	result     SubmitResult
+	cfg        config.Config
+	onSubmit   func(outputDir string, answers [5]string) (string, error)
+	width      int
 }
 
 const (
@@ -83,9 +87,17 @@ const (
 	iTags       = 4
 )
 
-func New(onSubmit func(answers [5]string) (string, error)) Model {
-	inputs := [5]textinput.Model{}
+func New(cfg config.Config, isFirstRun bool, onSubmit func(outputDir string, answers [5]string) (string, error)) Model {
+	// setup input
+	setup := textinput.New()
+	setup.CharLimit = 512
+	setup.Placeholder = cfg.OutputDir
+	if isFirstRun {
+		setup.Focus()
+	}
 
+	// incident inputs
+	inputs := [5]textinput.Model{}
 	for i := range inputs {
 		t := textinput.New()
 		t.CharLimit = 512
@@ -93,25 +105,30 @@ func New(onSubmit func(answers [5]string) (string, error)) Model {
 	}
 
 	inputs[iIncidentID].Placeholder = "e.g. PD-12345"
-	inputs[iIncidentID].Focus()
-
 	inputs[iSummary].Placeholder = "Brief description of what happened"
 
-	inputs[iStartTime].Placeholder = "YYYY-MM-DD HH:MM (leave blank to skip)"
-
-	inputs[iEndTime].Placeholder = "YYYY-MM-DD HH:MM (leave blank to skip)"
-
+	now := time.Now().Format("2006-01-02 15:04")
+	inputs[iStartTime].Placeholder = now
+	inputs[iEndTime].Placeholder = now
 	inputs[iTags].Placeholder = "comma-separated, e.g. database,outage,p1 (leave blank to skip)"
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#4ECDC4"))
 
+	firstStep := stepSetup
+	if !isFirstRun {
+		firstStep = stepIncidentID
+		inputs[iIncidentID].Focus()
+	}
+
 	return Model{
-		step:     stepIncidentID,
-		inputs:   inputs,
-		spinner:  sp,
-		onSubmit: onSubmit,
+		step:       firstStep,
+		setupInput: setup,
+		inputs:     inputs,
+		spinner:    sp,
+		cfg:        cfg,
+		onSubmit:   onSubmit,
 	}
 }
 
@@ -155,19 +172,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleEnter()
 
 		case "up", "shift+tab":
-			if m.step < stepConfirm {
+			if m.step > stepIncidentID && m.step < stepConfirm {
 				return m.movePrev()
 			}
 
 		case "down", "tab":
-			if m.step < stepConfirm {
+			if m.step >= stepIncidentID && m.step < stepConfirm {
 				return m.moveNext()
+			}
+
+		case "right":
+			if m.step == stepSetup {
+				if m.setupInput.Value() == "" && m.setupInput.Placeholder != "" {
+					m.setupInput.SetValue(m.setupInput.Placeholder)
+				}
+			} else if m.step <= stepTags {
+				idx := int(m.step) - 1 // offset by setup step
+				if m.inputs[idx].Value() == "" && m.inputs[idx].Placeholder != "" {
+					m.inputs[idx].SetValue(m.inputs[idx].Placeholder)
+				}
 			}
 		}
 	}
 
-	if m.step <= stepTags {
-		idx := int(m.step)
+	if m.step == stepSetup {
+		var cmd tea.Cmd
+		m.setupInput, cmd = m.setupInput.Update(msg)
+		return m, cmd
+	}
+
+	if m.step >= stepIncidentID && m.step <= stepTags {
+		idx := int(m.step) - 1 // offset by setup step
 		var cmd tea.Cmd
 		m.inputs[idx], cmd = m.inputs[idx].Update(msg)
 		return m, cmd
@@ -178,10 +213,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 	switch m.step {
+	case stepSetup:
+		dir := strings.TrimSpace(m.setupInput.Value())
+		if dir == "" {
+			dir = m.setupInput.Placeholder
+		}
+		m.cfg.OutputDir = dir
+		if err := config.Save(m.cfg); err == nil {
+			// saved successfully
+		}
+		m.step = stepIncidentID
+		m.inputs[iIncidentID].Focus()
+
 	case stepIncidentID:
 		if strings.TrimSpace(m.inputs[iIncidentID].Value()) == "" {
 			return m, nil
 		}
+		m.inputs[iIncidentID].Blur()
 		m.inputs[iSummary].Focus()
 		m.step = stepSummary
 
@@ -189,18 +237,22 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 		if strings.TrimSpace(m.inputs[iSummary].Value()) == "" {
 			return m, nil
 		}
+		m.inputs[iSummary].Blur()
 		m.inputs[iStartTime].Focus()
 		m.step = stepStartTime
 
 	case stepStartTime:
+		m.inputs[iStartTime].Blur()
 		m.inputs[iEndTime].Focus()
 		m.step = stepEndTime
 
 	case stepEndTime:
+		m.inputs[iEndTime].Blur()
 		m.inputs[iTags].Focus()
 		m.step = stepTags
 
 	case stepTags:
+		m.inputs[iTags].Blur()
 		m.step = stepConfirm
 
 	case stepConfirm:
@@ -212,11 +264,12 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 			m.inputs[iEndTime].Value(),
 			m.inputs[iTags].Value(),
 		}
+		outputDir := m.cfg.OutputDir
 		onSubmit := m.onSubmit
 		return m, tea.Batch(
 			m.spinner.Tick,
 			func() tea.Msg {
-				path, err := onSubmit(answers)
+				path, err := onSubmit(outputDir, answers)
 				return submitMsg{filePath: path, err: err}
 			},
 		)
@@ -229,31 +282,35 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) movePrev() (tea.Model, tea.Cmd) {
-	if m.step == 0 {
+	if m.step <= stepIncidentID {
 		return m, nil
 	}
-	m.inputs[int(m.step)].Blur()
+	cur := int(m.step) - 1 // current inputs index
+	m.inputs[cur].Blur()
 	m.step--
-	m.inputs[int(m.step)].Focus()
+	m.inputs[cur-1].Focus()
 	return m, nil
 }
 
 func (m Model) moveNext() (tea.Model, tea.Cmd) {
-	if int(m.step) >= len(m.inputs)-1 {
+	if m.step >= stepTags {
 		return m, nil
 	}
-	m.inputs[int(m.step)].Blur()
+	cur := int(m.step) - 1 // current inputs index
+	m.inputs[cur].Blur()
 	m.step++
-	m.inputs[int(m.step)].Focus()
+	m.inputs[cur+1].Focus()
 	return m, nil
 }
 
 func (m Model) View() string {
 	var b strings.Builder
 
-	b.WriteString(titleStyle.Render("  On-Call Incident Logger") + "\n\n")
+	b.WriteString(titleStyle.Render("  oncall-tui") + "\n\n")
 
 	switch m.step {
+	case stepSetup:
+		m.renderSetup(&b)
 	case stepIncidentID, stepSummary, stepStartTime, stepEndTime, stepTags:
 		m.renderInputStep(&b)
 	case stepConfirm:
@@ -269,6 +326,13 @@ func (m Model) View() string {
 	return b.String()
 }
 
+func (m Model) renderSetup(b *strings.Builder) {
+	b.WriteString(labelStyle.Render("Welcome! Where should incidents be saved?") + "\n\n")
+	b.WriteString(hintStyle.Render("Press → to accept the default, or type a path.") + "\n")
+	b.WriteString(fieldStyle.Render(m.setupInput.View()) + "\n")
+	b.WriteString(hintStyle.Render("enter: confirm  •  esc: quit") + "\n")
+}
+
 func (m Model) renderInputStep(b *strings.Builder) {
 	steps := []struct {
 		label string
@@ -277,13 +341,13 @@ func (m Model) renderInputStep(b *strings.Builder) {
 	}{
 		{"PagerDuty Incident #", "Required", iIncidentID},
 		{"Summary", "Required — what happened?", iSummary},
-		{"Start Time", "Optional", iStartTime},
-		{"End Time", "Optional", iEndTime},
+		{"Start Time", "Optional — YYYY-MM-DD HH:MM, blank = now", iStartTime},
+		{"End Time", "Optional — YYYY-MM-DD HH:MM, blank = still open", iEndTime},
 		{"Tags", "Optional", iTags},
 	}
 
 	for i, s := range steps {
-		active := int(m.step) == i
+		active := int(m.step)-1 == i
 		label := s.label
 		if active {
 			label = "> " + label
@@ -303,7 +367,7 @@ func (m Model) renderInputStep(b *strings.Builder) {
 		}
 	}
 
-	b.WriteString("\n" + hintStyle.Render("enter: next  •  tab/shift+tab: navigate  •  esc: quit") + "\n")
+	b.WriteString("\n" + hintStyle.Render("enter: next  •  →: accept placeholder  •  tab/shift+tab: navigate  •  esc: quit") + "\n")
 }
 
 func (m Model) renderConfirm(b *strings.Builder) {
@@ -313,8 +377,9 @@ func (m Model) renderConfirm(b *strings.Builder) {
 		{"Incident #", m.inputs[iIncidentID].Value()},
 		{"Summary", m.inputs[iSummary].Value()},
 		{"Start Time", orDash(m.inputs[iStartTime].Value())},
-		{"End Time", orDash(m.inputs[iEndTime].Value())},
+		{"End Time", orStillOpen(m.inputs[iEndTime].Value())},
 		{"Tags", orDash(m.inputs[iTags].Value())},
+		{"Save to", m.cfg.OutputDir},
 	}
 
 	for _, f := range fields {
@@ -348,11 +413,31 @@ func orDash(s string) string {
 	return s
 }
 
+func orStillOpen(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "Still open"
+	}
+	return s
+}
+
 func ParseTime(s string) (*time.Time, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		t := time.Now()
+		return &t, nil
+	}
+	return parseTimeStr(s)
+}
+
+func ParseEndTime(s string) (*time.Time, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return nil, nil
 	}
+	return parseTimeStr(s)
+}
+
+func parseTimeStr(s string) (*time.Time, error) {
 	layouts := []string{
 		"2006-01-02 15:04",
 		"2006-01-02T15:04",

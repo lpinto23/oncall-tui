@@ -26,27 +26,25 @@ func configPath() (string, error) {
 	return filepath.Join(home, ".config", "oncall-tui", "config.json"), nil
 }
 
-func Load() (Config, error) {
+func Load() (Config, bool, error) {
 	path, err := configPath()
 	if err != nil {
-		return defaultConfig(), nil
+		return defaultConfig(), true, nil
 	}
 
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		cfg := defaultConfig()
-		_ = Save(cfg)
-		return cfg, nil
+		return defaultConfig(), true, nil
 	}
 	if err != nil {
-		return defaultConfig(), err
+		return defaultConfig(), false, err
 	}
 
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return defaultConfig(), err
+		return defaultConfig(), false, err
 	}
-	return cfg, nil
+	return cfg, false, nil
 }
 
 func Save(cfg Config) error {
