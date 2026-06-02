@@ -10,15 +10,18 @@ A terminal UI tool for logging on-call incidents. Fill in a short form, and the 
 
 - Interactive multi-step TUI powered by [Bubble Tea](https://github.com/charmbracelet/bubbletea)
 - First-run setup prompt to configure where incidents are saved
-- Prompts for PagerDuty incident number, summary, start/end times, tags, and resolution
+- Prompts for PagerDuty incident number, summary, start/end times, affected services, tags, and resolution
 - Summary and resolution fields support **multiline input** (`Enter` = newline, `Ctrl+D` = done)
 - Start time defaults to now — press `→` to accept and edit
 - Leaving end time blank marks the incident as **still open**; press `→` to fill current time
 - Enriches notes via the local `claude` CLI using a consistent report template (no API key needed)
+- Enriched reports include an `## AI Enriched Report` header for clear provenance
 - Confirm screen shows all fields including save location before submitting
 - Back-navigation between fields with `Tab` / `Shift+Tab`
 - `--resolution` flag to append a resolution to an existing incident
 - `--close` flag to close an open incident — sets end time and optional resolution
+- `--raw` / `-raw` flag to skip LLM enrichment and generate the same report format from user input only
+- `--enriched` / `-enriched` flag to force LLM enrichment when your saved default mode is raw
 
 ---
 
@@ -59,6 +62,18 @@ make uninstall
 oncall-tui
 ```
 
+To skip Claude enrichment and build the report from your typed notes only:
+
+```bash
+oncall-tui --raw
+```
+
+To force enrichment for a run (useful when your saved default mode is `raw`):
+
+```bash
+oncall-tui --enriched
+```
+
 ### Add a resolution to an existing incident
 
 ```bash
@@ -75,11 +90,22 @@ oncall-tui --close PD-12345
 
 Prompts for an end time (defaults to now) and an optional resolution. Updates `**End:** Still open` in the existing file and appends a `## Resolution` section if provided. If no file is found, you are offered to create a new entry.
 
+`--close` behavior when end time is left blank:
+
+- if resolution is provided, `**End:**` is set to the same timestamp used in `**Resolved:**`
+- if resolution is empty, `**End:**` is set to the current time
+
 ---
 
 ## First run
 
-On the first run you will be prompted to choose where incident files are saved. The default (`~/oncall-incidents`) is shown as a placeholder — press `→` to accept it or type a custom path, then `Enter` to confirm. The choice is saved to `~/.config/oncall-tui/config.json` and never asked again.
+On the first run you will be prompted for:
+
+1. where incident files are saved (default: `~/oncall-incidents`)
+2. the default report mode (`enriched` or `raw`)
+
+Press `→` to accept placeholders, or type your own values.
+Both choices are saved to `~/.config/oncall-tui/config.json` and used on subsequent runs.
 
 ![Setup screen](docs/screenshots/setup.gif)
 
@@ -89,7 +115,7 @@ On the first run you will be prompted to choose where incident files are saved. 
 
 ![Incident form](docs/screenshots/form.gif)
 
-The tool walks you through six fields:
+The tool walks you through seven fields:
 
 | Step | Field | Required | Notes |
 |------|-------|----------|-------|
@@ -97,10 +123,16 @@ The tool walks you through six fields:
 | 2 | Summary | Yes | Multiline — `Enter` = newline, `Ctrl+D` = next |
 | 3 | Start time (`YYYY-MM-DD HH:MM`) | No | Blank = now |
 | 4 | End time (`YYYY-MM-DD HH:MM`) | No | Blank = still open |
-| 5 | Tags (comma-separated) | No | |
-| 6 | Resolution | No | Multiline — `Enter` = newline, `Ctrl+D` = next |
+| 5 | Affected services (comma-separated) | No | Example: `checkout-api,postgres,redis` |
+| 6 | Tags (comma-separated) | No | |
+| 7 | Resolution | No | Multiline — `Enter` = newline, `Ctrl+D` = next |
 
-After confirming, the tool calls Claude and writes the enriched report to your configured directory.
+After confirming, the tool writes to your configured directory based on the active mode:
+
+- **Enriched mode**: runs Claude, then writes an `## AI Enriched Report` section
+- **Raw mode**: skips Claude and writes directly from operator input
+
+CLI flags override the saved default for that run (`--raw` / `--enriched`).
 
 ---
 
@@ -113,6 +145,7 @@ After confirming, the tool calls Claude and writes the enriched report to your c
 | End time left blank | Logged as **Still open** |
 | End time `→` pressed | Fills current time for editing |
 | Either time typed manually | Parsed as `YYYY-MM-DD HH:MM` |
+| `--close` with blank end + resolution | End time uses the resolution timestamp |
 
 ---
 
@@ -146,9 +179,12 @@ INCIDENT_{PAGERDUTY_ID}_{YYYY-MM-DD-HH-MM-SS}.md
 
 **Start:** 2026-06-01 13:00:00 UTC
 **End:** 2026-06-01 14:15:00 UTC
+**Affected Services:** checkout-api, postgres
 **Tags:** database, p1, latency
 
 ---
+
+## AI Enriched Report
 
 Database latency spike caused elevated error rates on the checkout service.
 
@@ -164,6 +200,7 @@ error rates on the checkout service. The issue was tagged as database, p1, and l
 | Incident ID | PD-12345                 |
 | Start Time  | 2026-06-01 13:00:00 UTC  |
 | End Time    | 2026-06-01 14:15:00 UTC  |
+| Affected Services | checkout-api, postgres |
 | Duration    | ~75 minutes              |
 | Tags        | database, p1, latency    |
 
@@ -193,9 +230,12 @@ Query latencies returned to normal within two minutes of the failover.
 
 **Start:** 2026-06-01 13:00:00 UTC
 **End:** Still open
+**Affected Services:** checkout-api, postgres
 **Tags:** database, p1, latency
 
 ---
+
+## AI Enriched Report
 
 Database latency spike caused elevated error rates on the checkout service.
 
@@ -213,7 +253,7 @@ Database latency spike caused elevated error rates on the checkout service.
 
 ### After running `--close`
 
-The `**End:** Still open` line is patched in-place and a `## Resolution` section is appended:
+The `**End:**` header is updated in-place. If a resolution is provided, the report gets a `## Resolution` section (or reuses the existing one) and appends a timestamped entry:
 
 ```markdown
 **End:** 2026-06-01 14:15:00 UTC
@@ -226,6 +266,8 @@ The `**End:** Still open` line is patched in-place and a `## Resolution` section
 
 The primary database replica was promoted after the primary node became unresponsive.
 ```
+
+If you run `--close` or `--resolution` again later, new entries are added under the same `## Resolution` section (the section header is not duplicated).
 
 ---
 
@@ -241,7 +283,8 @@ It is created automatically on first run via the setup prompt. To change the out
 
 ```json
 {
-  "output_dir": "/path/to/your/incidents"
+  "output_dir": "/path/to/your/incidents",
+  "default_mode": "enriched"
 }
 ```
 
@@ -256,6 +299,17 @@ echo "<prompt>" | claude -p --output-format text
 ```
 
 Claude fills in a fixed template — intro paragraph, `## Description`, `## Incident Details` table, `## Impact`, `## Timeline`, and optionally `## Resolution` — so the output format is consistent across all incidents. No API key needed; it uses whatever Claude Code session is already authenticated on your machine.
+
+### Raw mode (no LLM)
+
+Use `--raw` (or `-raw`) when you want to avoid generated interpretations and keep the report strictly based on operator-entered data.
+
+- Keeps the same markdown section layout as enriched mode
+- Starts directly at `## Description` (no duplicated intro paragraph)
+- Uses your summary/resolution text directly
+- Fills deterministic placeholders for sections that usually need analysis (for example, Impact)
+
+When your default mode is `raw`, use `--enriched`/`-enriched` for one-off runs that should call Claude.
 
 ---
 
