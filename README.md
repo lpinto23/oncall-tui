@@ -16,6 +16,7 @@ A terminal UI tool for logging on-call incidents. Fill in a short form, and the 
 - Leaving end time blank marks the incident as **still open**; press `→` to fill current time
 - Enriches notes via the local `claude` CLI using a consistent report template (no API key needed)
 - Enriched reports include an `## AI Enriched Report` header for clear provenance
+- Enriched reports preserve the original operator-entered raw notes at the top (`## Original Raw Input`)
 - Confirm screen shows all fields including save location before submitting
 - Back-navigation between fields with `Tab` / `Shift+Tab`
 - `--resolution` flag to append a resolution to an existing incident
@@ -73,6 +74,8 @@ To force enrichment for a run (useful when your saved default mode is `raw`):
 ```bash
 oncall-tui --enriched
 ```
+
+If you run without `--raw` or `--enriched`, you can choose the output mode on the confirm step right before saving.
 
 ### Add a resolution to an existing incident
 
@@ -133,6 +136,7 @@ After confirming, the tool writes to your configured directory based on the acti
 - **Raw mode**: skips Claude and writes directly from operator input
 
 CLI flags override the saved default for that run (`--raw` / `--enriched`).
+Without explicit flags, you can switch mode on the confirm screen with `R` (raw) or `E` (enriched).
 
 ---
 
@@ -156,6 +160,8 @@ CLI flags override the saved default for that run (`--raw` / `--enriched`).
 | `Enter` | Advance to next step / insert newline in multiline fields |
 | `Ctrl+D` | Finish a multiline field and advance |
 | `→` | Accept the placeholder value for the current field |
+| `R` | Select raw mode on confirm step |
+| `E` | Select enriched mode on confirm step |
 | `Tab` / `↓` | Move to next field |
 | `Shift+Tab` / `↑` | Move to previous field |
 | `Esc` / `Ctrl+C` | Quit |
@@ -183,6 +189,17 @@ INCIDENT_{PAGERDUTY_ID}_{YYYY-MM-DD-HH-MM-SS}.md
 **Tags:** database, p1, latency
 
 ---
+
+## Original Raw Input
+
+```text
+Summary: Database latency spike on checkout service
+Start Time: 2026-06-01 13:00:00 UTC
+End Time: 2026-06-01 14:15:00 UTC
+Affected Services: checkout-api, postgres
+Tags: database, p1, latency
+Resolution: The primary database replica was promoted after the primary node became unresponsive.
+```
 
 ## AI Enriched Report
 
@@ -234,6 +251,17 @@ Query latencies returned to normal within two minutes of the failover.
 **Tags:** database, p1, latency
 
 ---
+
+## Original Raw Input
+
+```text
+Summary: Database latency spike on checkout service
+Start Time: 2026-06-01 13:00:00 UTC
+End Time: Still open
+Affected Services: checkout-api, postgres
+Tags: database, p1, latency
+Resolution: N/A
+```
 
 ## AI Enriched Report
 
@@ -299,6 +327,8 @@ echo "<prompt>" | claude -p --output-format text
 ```
 
 Claude fills in a fixed template — intro paragraph, `## Description`, `## Incident Details` table, `## Impact`, `## Timeline`, and optionally `## Resolution` — so the output format is consistent across all incidents. No API key needed; it uses whatever Claude Code session is already authenticated on your machine.
+
+In enriched mode, the generated section is preceded by `## Original Raw Input` so operator-entered notes are always preserved in the final incident file.
 
 ### Raw mode (no LLM)
 
