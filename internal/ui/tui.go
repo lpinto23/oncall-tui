@@ -16,14 +16,15 @@ import (
 type step int
 
 const (
-	stepSetup step = iota
-	stepNotFound       // --resolution/--close: no file found, offer to create
-	stepResolutionOnly // --resolution: file found, just fill resolution
-	stepCloseOnly      // --close: file found, fill end time + optional resolution
+	stepSetup          step = iota // first run: output directory + default mode
+	stepNotFound                   // --resolution/--close: no file found, offer to create
+	stepResolutionOnly             // --resolution: file found, just fill resolution
+	stepCloseOnly                  // --close: file found, fill end time + optional resolution
 	stepIncidentID
 	stepSummary
 	stepStartTime
 	stepEndTime
+	stepAffectedServices
 	stepTags
 	stepResolution
 	stepConfirm
@@ -81,24 +82,29 @@ type SubmitResult struct {
 type Options struct {
 	ResolutionMode bool
 	CloseMode      bool
+	RawMode        bool
+	ModeLocked     bool
 	IncidentID     string
 	ExistingFile   string
 }
 
 // Model holds two kinds of inputs:
-//   - shortInputs: single-line textinput for ID, start, end, tags
+//   - shortInputs: single-line textinput for ID, start, end, affected services, tags
 //   - longInputs:  textarea for summary and resolution
 type Model struct {
 	step      step
+	setupStep int // 0=output dir, 1=default mode
 	closeStep int // 0=end time, 1=resolution (used only in stepCloseOnly)
 
-	setupInput textinput.Model
+	setupInput     textinput.Model
+	setupModeInput textinput.Model
 
 	// single-line fields
-	idInput    textinput.Model
-	startInput textinput.Model
-	endInput   textinput.Model
-	tagsInput  textinput.Model
+	idInput               textinput.Model
+	startInput            textinput.Model
+	endInput              textinput.Model
+	affectedServicesInput textinput.Model
+	tagsInput             textinput.Model
 
 	// multiline fields
 	summaryInput    textarea.Model
@@ -108,7 +114,7 @@ type Model struct {
 	result   SubmitResult
 	cfg      config.Config
 	opts     Options
-	onSubmit func(outputDir, existingFile string, answers [6]string) (string, error)
+	onSubmit func(outputDir, existingFile string, answers [7]string, rawMode bool) (string, error)
 	width    int
 }
 
@@ -132,13 +138,16 @@ func newTextinput(placeholder string) textinput.Model {
 	return ti
 }
 
-func New(cfg config.Config, isFirstRun bool, opts Options, onSubmit func(outputDir, existingFile string, answers [6]string) (string, error)) Model {
+func New(cfg config.Config, isFirstRun bool, opts Options, onSubmit func(outputDir, existingFile string, answers [7]string, rawMode bool) (string, error)) Model {
 	setup := newTextinput(cfg.OutputDir)
+	setupModeInput := newTextinput(config.ModeEnriched)
+	setupModeInput.SetValue(config.NormalizeMode(cfg.DefaultMode))
 
 	idInput := newTextinput("e.g. PD-12345")
 	now := time.Now().Format("2006-01-02 15:04")
 	startInput := newTextinput(now)
 	endInput := newTextinput(now)
+	affectedServicesInput := newTextinput("comma-separated, e.g. checkout-api,postgres,redis (leave blank to skip)")
 	tagsInput := newTextinput("comma-separated, e.g. database,outage,p1 (leave blank to skip)")
 
 	summaryInput := newTextarea("Brief description of what happened", 4)
@@ -173,18 +182,21 @@ func New(cfg config.Config, isFirstRun bool, opts Options, onSubmit func(outputD
 	_ = cmd
 
 	return Model{
-		step:            firstStep,
-		setupInput:      setup,
-		idInput:         idInput,
-		startInput:      startInput,
-		endInput:        endInput,
-		tagsInput:       tagsInput,
-		summaryInput:    summaryInput,
-		resolutionInput: resolutionInput,
-		spinner:         sp,
-		cfg:             cfg,
-		opts:            opts,
-		onSubmit:        onSubmit,
+		step:                  firstStep,
+		setupStep:             0,
+		setupInput:            setup,
+		setupModeInput:        setupModeInput,
+		idInput:               idInput,
+		startInput:            startInput,
+		endInput:              endInput,
+		affectedServicesInput: affectedServicesInput,
+		tagsInput:             tagsInput,
+		summaryInput:          summaryInput,
+		resolutionInput:       resolutionInput,
+		spinner:               sp,
+		cfg:                   cfg,
+		opts:                  opts,
+		onSubmit:              onSubmit,
 	}
 }
 
@@ -245,7 +257,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			// single-line fields advance; textarea fields insert newline (handled below)
 			switch m.step {
-			case stepSetup, stepNotFound, stepIncidentID, stepStartTime, stepEndTime, stepTags, stepConfirm, stepDone, stepError:
+			case stepSetup, stepNotFound, stepIncidentID, stepStartTime, stepEndTime, stepAffectedServices, stepTags, stepConfirm, stepDone, stepError:
 				return m.handleEnter()
 			case stepCloseOnly:
 				if m.closeStep == 0 {
@@ -285,8 +297,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.endInput.SetValue(m.endInput.Placeholder)
 				}
 			case stepSetup:
-				if m.setupInput.Value() == "" {
-					m.setupInput.SetValue(m.setupInput.Placeholder)
+				if m.setupStep == 0 {
+					if m.setupInput.Value() == "" {
+						m.setupInput.SetValue(m.setupInput.Placeholder)
+					}
+				} else {
+					if m.setupModeInput.Value() == "" {
+						m.setupModeInput.SetValue(m.setupModeInput.Placeholder)
+					}
 				}
 			case stepIncidentID:
 				if m.idInput.Value() == "" {
@@ -304,6 +322,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.tagsInput.Value() == "" {
 					m.tagsInput.SetValue(m.tagsInput.Placeholder)
 				}
+			case stepAffectedServices:
+				if m.affectedServicesInput.Value() == "" {
+					m.affectedServicesInput.SetValue(m.affectedServicesInput.Placeholder)
+				}
 			}
 		}
 	}
@@ -315,7 +337,11 @@ func (m Model) updateActiveInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	switch m.step {
 	case stepSetup:
-		m.setupInput, cmd = m.setupInput.Update(msg)
+		if m.setupStep == 0 {
+			m.setupInput, cmd = m.setupInput.Update(msg)
+		} else {
+			m.setupModeInput, cmd = m.setupModeInput.Update(msg)
+		}
 	case stepIncidentID:
 		m.idInput, cmd = m.idInput.Update(msg)
 	case stepSummary:
@@ -324,6 +350,8 @@ func (m Model) updateActiveInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.startInput, cmd = m.startInput.Update(msg)
 	case stepEndTime:
 		m.endInput, cmd = m.endInput.Update(msg)
+	case stepAffectedServices:
+		m.affectedServicesInput, cmd = m.affectedServicesInput.Update(msg)
 	case stepTags:
 		m.tagsInput, cmd = m.tagsInput.Update(msg)
 	case stepResolution, stepResolutionOnly:
@@ -367,7 +395,26 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 		if dir == "" {
 			dir = m.setupInput.Placeholder
 		}
+
+		if m.setupStep == 0 {
+			m.cfg.OutputDir = dir
+			m.setupInput.Blur()
+			m.setupStep = 1
+			return m, m.setupModeInput.Focus()
+		}
+
+		mode, err := parseSetupMode(m.setupModeInput.Value(), m.setupModeInput.Placeholder)
+		if err != nil {
+			m.result = SubmitResult{Err: err}
+			m.step = stepError
+			return m, nil
+		}
+
 		m.cfg.OutputDir = dir
+		m.cfg.DefaultMode = mode
+		if !m.opts.ModeLocked {
+			m.opts.RawMode = mode == config.ModeRaw
+		}
 		if err := config.Save(m.cfg); err != nil {
 			m.result = SubmitResult{Err: fmt.Errorf("saving config: %w", err)}
 			m.step = stepError
@@ -406,6 +453,11 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 
 	case stepEndTime:
 		m.endInput.Blur()
+		m.affectedServicesInput.Focus()
+		m.step = stepAffectedServices
+
+	case stepAffectedServices:
+		m.affectedServicesInput.Blur()
 		m.tagsInput.Focus()
 		m.step = stepTags
 
@@ -416,11 +468,12 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 
 	case stepConfirm:
 		m.step = stepProcessing
-		answers := [6]string{
+		answers := [7]string{
 			m.idInput.Value(),
 			m.summaryInput.Value(),
 			m.startInput.Value(),
 			m.endInput.Value(),
+			m.affectedServicesInput.Value(),
 			m.tagsInput.Value(),
 			m.resolutionInput.Value(),
 		}
@@ -430,7 +483,7 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 		return m, tea.Batch(
 			m.spinner.Tick,
 			func() tea.Msg {
-				path, err := onSubmit(outputDir, existingFile, answers)
+				path, err := onSubmit(outputDir, existingFile, answers, m.opts.RawMode)
 				return submitMsg{filePath: path, err: err}
 			},
 		)
@@ -455,10 +508,14 @@ func (m Model) movePrev() (tea.Model, tea.Cmd) {
 		m.endInput.Blur()
 		m.startInput.Focus()
 		m.step = stepStartTime
-	case stepTags:
-		m.tagsInput.Blur()
+	case stepAffectedServices:
+		m.affectedServicesInput.Blur()
 		m.endInput.Focus()
 		m.step = stepEndTime
+	case stepTags:
+		m.tagsInput.Blur()
+		m.affectedServicesInput.Focus()
+		m.step = stepAffectedServices
 	case stepResolution:
 		m.resolutionInput.Blur()
 		m.tagsInput.Focus()
@@ -486,6 +543,10 @@ func (m Model) moveNext() (tea.Model, tea.Cmd) {
 		m.step = stepEndTime
 	case stepEndTime:
 		m.endInput.Blur()
+		m.affectedServicesInput.Focus()
+		m.step = stepAffectedServices
+	case stepAffectedServices:
+		m.affectedServicesInput.Blur()
 		m.tagsInput.Focus()
 		m.step = stepTags
 	case stepTags:
@@ -509,7 +570,7 @@ func (m Model) View() string {
 		m.renderResolutionOnly(&b)
 	case stepCloseOnly:
 		m.renderCloseOnly(&b)
-	case stepIncidentID, stepSummary, stepStartTime, stepEndTime, stepTags, stepResolution:
+	case stepIncidentID, stepSummary, stepStartTime, stepEndTime, stepAffectedServices, stepTags, stepResolution:
 		m.renderInputStep(&b)
 	case stepConfirm:
 		m.renderConfirm(&b)
@@ -525,10 +586,21 @@ func (m Model) View() string {
 }
 
 func (m Model) renderSetup(b *strings.Builder) {
-	b.WriteString(labelStyle.Render("Welcome! Where should incidents be saved?") + "\n\n")
-	b.WriteString(hintStyle.Render("Press → to accept the default, or type a path.") + "\n")
-	b.WriteString(fieldStyle.Render(m.setupInput.View()) + "\n")
-	b.WriteString(hintStyle.Render("enter: confirm  •  esc: quit") + "\n")
+	b.WriteString(labelStyle.Render("Welcome! Let's configure oncall-tui") + "\n\n")
+	b.WriteString(hintStyle.Render("Set save location and default report mode.") + "\n\n")
+
+	if m.setupStep == 0 {
+		b.WriteString(labelStyle.Render("> Output Directory") + "\n")
+		b.WriteString(fieldStyle.Render(m.setupInput.View()) + "\n")
+		b.WriteString(dimStyle.Render("  Default Mode: "+config.NormalizeMode(m.setupModeInput.Value())) + "\n")
+		b.WriteString(hintStyle.Render("enter: next  •  →: accept placeholder  •  esc: quit") + "\n")
+		return
+	}
+
+	b.WriteString(dimStyle.Render("  Output Directory: "+orDash(m.cfg.OutputDir)) + "\n\n")
+	b.WriteString(labelStyle.Render("> Default Mode") + " " + hintStyle.Render("(raw or enriched)") + "\n")
+	b.WriteString(fieldStyle.Render(m.setupModeInput.View()) + "\n")
+	b.WriteString(hintStyle.Render("enter: save setup  •  →: accept placeholder  •  esc: quit") + "\n")
 }
 
 func (m Model) renderCloseOnly(b *strings.Builder) {
@@ -573,11 +645,12 @@ func (m Model) renderInputStep(b *strings.Builder) {
 		{"Summary", "Required — enter: newline, ctrl+d: next field"},
 		{"Start Time", "Optional — YYYY-MM-DD HH:MM, blank = now"},
 		{"End Time", "Optional — YYYY-MM-DD HH:MM, blank = still open"},
+		{"Affected Services", "Optional — comma-separated"},
 		{"Tags", "Optional — comma-separated"},
 		{"Resolution", "Optional — enter: newline, ctrl+d: next field"},
 	}
 
-	steps := []step{stepIncidentID, stepSummary, stepStartTime, stepEndTime, stepTags, stepResolution}
+	steps := []step{stepIncidentID, stepSummary, stepStartTime, stepEndTime, stepAffectedServices, stepTags, stepResolution}
 
 	for i, s := range steps {
 		f := fields[i]
@@ -619,6 +692,8 @@ func (m Model) viewForStep(s step) string {
 		return m.startInput.View()
 	case stepEndTime:
 		return m.endInput.View()
+	case stepAffectedServices:
+		return m.affectedServicesInput.View()
 	case stepTags:
 		return m.tagsInput.View()
 	case stepResolution:
@@ -637,6 +712,8 @@ func (m Model) valueForStep(s step) string {
 		return m.startInput.Value()
 	case stepEndTime:
 		return m.endInput.Value()
+	case stepAffectedServices:
+		return m.affectedServicesInput.Value()
 	case stepTags:
 		return m.tagsInput.Value()
 	case stepResolution:
@@ -671,9 +748,11 @@ func (m Model) renderConfirm(b *strings.Builder) {
 		b.WriteString(labelStyle.Render("Review your incident") + "\n\n")
 		fields := []struct{ k, v string }{
 			{"Incident #", m.idInput.Value()},
+			{"Mode", modeLabel(m.opts.RawMode)},
 			{"Summary", strings.ReplaceAll(m.summaryInput.Value(), "\n", " ↵ ")},
 			{"Start Time", orDash(m.startInput.Value())},
 			{"End Time", orStillOpen(m.endInput.Value())},
+			{"Affected Services", orDash(m.affectedServicesInput.Value())},
 			{"Tags", orDash(m.tagsInput.Value())},
 			{"Resolution", orDash(strings.ReplaceAll(m.resolutionInput.Value(), "\n", " ↵ "))},
 			{"Save to", m.cfg.OutputDir},
@@ -683,12 +762,53 @@ func (m Model) renderConfirm(b *strings.Builder) {
 		}
 	}
 
-	b.WriteString("\n" + hintStyle.Render("Press enter to save & enrich with Claude  •  esc to quit") + "\n")
+	action := confirmActionLabel(m.opts)
+	b.WriteString("\n" + hintStyle.Render("Press enter to "+action+"  •  esc to quit") + "\n")
 }
 
 func (m Model) renderProcessing(b *strings.Builder) {
+	if m.opts.CloseMode || m.opts.ResolutionMode {
+		b.WriteString(m.spinner.View() + " Saving incident updates...\n")
+		b.WriteString(hintStyle.Render("This should be quick.") + "\n")
+		return
+	}
+
+	if m.opts.RawMode {
+		b.WriteString(m.spinner.View() + " Saving incident report from raw notes...\n")
+		b.WriteString(hintStyle.Render("This should be quick.") + "\n")
+		return
+	}
+
 	b.WriteString(m.spinner.View() + " Saving and enriching with Claude AI...\n")
 	b.WriteString(hintStyle.Render("This may take a few seconds.") + "\n")
+}
+
+func confirmActionLabel(opts Options) string {
+	if opts.CloseMode || opts.ResolutionMode {
+		return "save changes"
+	}
+	if opts.RawMode {
+		return "save raw incident report"
+	}
+	return "save & enrich with Claude"
+}
+
+func modeLabel(rawMode bool) string {
+	if rawMode {
+		return "Raw (no LLM)"
+	}
+	return "Enriched (Claude)"
+}
+
+func parseSetupMode(raw, placeholder string) (string, error) {
+	mode := strings.TrimSpace(raw)
+	if mode == "" {
+		mode = strings.TrimSpace(placeholder)
+	}
+	if !config.IsValidMode(mode) {
+		return "", fmt.Errorf("invalid default mode %q (expected raw or enriched)", mode)
+	}
+	return config.NormalizeMode(mode), nil
 }
 
 func (m Model) renderDone(b *strings.Builder) {

@@ -5,10 +5,17 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
+)
+
+const (
+	ModeEnriched = "enriched"
+	ModeRaw      = "raw"
 )
 
 type Config struct {
-	OutputDir string `json:"output_dir"`
+	OutputDir   string `json:"output_dir"`
+	DefaultMode string `json:"default_mode"`
 }
 
 func defaultConfig() Config {
@@ -17,8 +24,25 @@ func defaultConfig() Config {
 		home = os.TempDir()
 	}
 	return Config{
-		OutputDir: filepath.Join(home, "oncall-incidents"),
+		OutputDir:   filepath.Join(home, "oncall-incidents"),
+		DefaultMode: ModeEnriched,
 	}
+}
+
+func NormalizeMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case ModeRaw:
+		return ModeRaw
+	case ModeEnriched:
+		return ModeEnriched
+	default:
+		return ModeEnriched
+	}
+}
+
+func IsValidMode(mode string) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(mode))
+	return trimmed == ModeRaw || trimmed == ModeEnriched
 }
 
 func configPath() (string, error) {
@@ -47,10 +71,19 @@ func Load() (Config, bool, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return defaultConfig(), false, err
 	}
+	if strings.TrimSpace(cfg.OutputDir) == "" {
+		cfg.OutputDir = defaultConfig().OutputDir
+	}
+	cfg.DefaultMode = NormalizeMode(cfg.DefaultMode)
 	return cfg, false, nil
 }
 
 func Save(cfg Config) error {
+	cfg.DefaultMode = NormalizeMode(cfg.DefaultMode)
+	if strings.TrimSpace(cfg.OutputDir) == "" {
+		cfg.OutputDir = defaultConfig().OutputDir
+	}
+
 	path, err := configPath()
 	if err != nil {
 		return err

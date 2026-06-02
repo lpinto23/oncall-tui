@@ -74,6 +74,11 @@ func buildPrompt(inc model.Incident) string {
 		tags = strings.Join(inc.Tags, ", ")
 	}
 
+	affectedServices := "N/A"
+	if len(inc.AffectedServices) > 0 {
+		affectedServices = strings.Join(inc.AffectedServices, ", ")
+	}
+
 	sb.WriteString("You are an on-call engineer writing a structured incident report.\n")
 	sb.WriteString("Fill in the template below using ONLY the information from the raw notes. Do NOT invent facts.\n")
 	sb.WriteString("Use plain, technical language. Expand abbreviations where obvious but do not guess.\n\n")
@@ -84,6 +89,7 @@ func buildPrompt(inc model.Incident) string {
 	sb.WriteString(fmt.Sprintf("Start Time: %s\n", startTime))
 	sb.WriteString(fmt.Sprintf("End Time: %s\n", endTime))
 	sb.WriteString(fmt.Sprintf("Duration: %s\n", duration))
+	sb.WriteString(fmt.Sprintf("Affected Services: %s\n", affectedServices))
 	sb.WriteString(fmt.Sprintf("Tags: %s\n", tags))
 	if inc.Resolution != "" {
 		sb.WriteString(fmt.Sprintf("Resolution: %s\n", inc.Resolution))
@@ -97,7 +103,7 @@ func buildPrompt(inc model.Incident) string {
 
 	// Description
 	sb.WriteString("## Description\n\n")
-	sb.WriteString("{Two to four sentences describing what happened, which systems were affected, and the user/business impact. Derive from summary and tags only.}\n\n")
+	sb.WriteString("{Two to four sentences describing what happened, which systems were affected, and the user/business impact. Derive from summary, affected services, and tags only.}\n\n")
 
 	// Incident Details table
 	sb.WriteString("## Incident Details\n\n")
@@ -106,12 +112,13 @@ func buildPrompt(inc model.Incident) string {
 	sb.WriteString(fmt.Sprintf("| Incident ID | %s |\n", inc.PagerDutyID))
 	sb.WriteString(fmt.Sprintf("| Start Time  | %s |\n", startTime))
 	sb.WriteString(fmt.Sprintf("| End Time    | %s |\n", endTime))
+	sb.WriteString(fmt.Sprintf("| Affected Services | %s |\n", affectedServices))
 	sb.WriteString(fmt.Sprintf("| Duration    | %s |\n", duration))
 	sb.WriteString(fmt.Sprintf("| Tags        | %s |\n\n", tags))
 
 	// Impact
 	sb.WriteString("## Impact\n\n")
-	sb.WriteString("{One to two sentences on the user-facing or business impact inferred from the summary and tags.}\n\n")
+	sb.WriteString("{One to two sentences on the user-facing or business impact inferred from the summary, affected services, and tags.}\n\n")
 
 	// Timeline
 	sb.WriteString("## Timeline\n\n")

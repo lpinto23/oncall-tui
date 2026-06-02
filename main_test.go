@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/lpinto23/oncall-tui/internal/config"
+	"github.com/lpinto23/oncall-tui/internal/model"
 )
 
 func TestValidateRequiredFields(t *testing.T) {
@@ -53,6 +56,32 @@ func TestValidateChronology(t *testing.T) {
 			err := validateChronology(tt.start, tt.end)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("validateChronology() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestParseAffectedServices(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want []string
+	}{
+		{name: "empty input", raw: "", want: nil},
+		{name: "comma separated", raw: "checkout-api,postgres,redis", want: []string{"checkout-api", "postgres", "redis"}},
+		{name: "trims blanks", raw: " checkout-api, , redis ", want: []string{"checkout-api", "redis"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseAffectedServices(tt.raw)
+			if len(got) != len(tt.want) {
+				t.Fatalf("len mismatch: got %v want %v", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("item %d mismatch: got %q want %q", i, got[i], tt.want[i])
+				}
 			}
 		})
 	}
@@ -162,4 +191,253 @@ func TestWriteFileAtomically(t *testing.T) {
 			t.Fatal("writeFileAtomically() expected error for missing parent directory")
 		}
 	})
+}
+
+func TestBuildIncidentContentRawMode(t *testing.T) {
+	start := time.Date(2026, 6, 2, 10, 0, 0, 0, time.UTC)
+	end := start.Add(45 * time.Minute)
+	inc := modelIncidentForTest(
+		"PD-321",
+		"API latency spike",
+		&start,
+		&end,
+		[]string{"checkout-api", "postgres"},
+		[]string{"api", "p1"},
+		"Rolled back deploy",
+	)
+
+	content, err := buildIncidentContent(inc, true)
+	if err != nil {
+		t.Fatalf("buildIncidentContent(raw) returned error: %v", err)
+	}
+
+	if strings.Contains(content, "{Two to four sentences") {
+		t.Fatalf("raw content should not include LLM template placeholders: %q", content)
+	}
+	if !strings.Contains(content, "## Description") || !strings.Contains(content, "## Incident Details") || !strings.Contains(content, "## Timeline") {
+		t.Fatalf("raw content missing required sections: %q", content)
+	}
+	if !strings.Contains(content, "API latency spike") {
+		t.Fatalf("raw content missing user summary: %q", content)
+	}
+	if !strings.Contains(content, "| Affected Services | checkout-api, postgres |") {
+		t.Fatalf("raw content missing affected services table row: %q", content)
+	}
+	if strings.HasPrefix(strings.TrimSpace(content), "API latency spike") {
+		t.Fatalf("raw content should start directly at Description section")
+	}
+	if !strings.HasPrefix(strings.TrimSpace(content), "## Description") {
+		t.Fatalf("raw content should start with Description section")
+	}
+}
+
+func TestBuildEnrichedIncidentContent(t *testing.T) {
+	t.Run("adds enrichment header once", func(t *testing.T) {
+		input := "Incident summary\n\n## Description\n\ncontent"
+		got := buildEnrichedIncidentContent(input)
+		if !strings.HasPrefix(got, aiEnrichedHeader+"\n\n") {
+			t.Fatalf("missing enrichment header: %q", got)
+		}
+		if strings.Count(got, aiEnrichedHeader) != 1 {
+			t.Fatalf("expected single enrichment header: %q", got)
+		}
+	})
+
+	t.Run("keeps existing header", func(t *testing.T) {
+		input := aiEnrichedHeader + "\n\nAlready enriched"
+		got := buildEnrichedIncidentContent(input)
+		if got != input {
+			t.Fatalf("expected unchanged content when header already exists")
+		}
+	})
+}
+
+func TestResolveRawMode(t *testing.T) {
+	tests := []struct {
+		name       string
+		cfgMode    string
+		rawFlag    bool
+		enrichFlag bool
+		want       bool
+		wantErr    bool
+	}{
+		{name: "default enriched", cfgMode: config.ModeEnriched, want: false},
+		{name: "default raw", cfgMode: config.ModeRaw, want: true},
+		{name: "raw flag overrides", cfgMode: config.ModeEnriched, rawFlag: true, want: true},
+		{name: "enriched flag overrides raw default", cfgMode: config.ModeRaw, enrichFlag: true, want: false},
+		{name: "conflicting flags", cfgMode: config.ModeEnriched, rawFlag: true, enrichFlag: true, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveRawMode(config.Config{DefaultMode: tt.cfgMode}, tt.rawFlag, tt.enrichFlag)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("resolveRawMode() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if got != tt.want {
+				t.Fatalf("resolveRawMode() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildRawIncidentContentEscapesTableCells(t *testing.T) {
+	start := time.Date(2026, 6, 2, 10, 0, 0, 0, time.UTC)
+	inc := modelIncidentForTest(
+		"PD|777",
+		"Gateway | timeout",
+		&start,
+		nil,
+		[]string{"checkout|api"},
+		[]string{"edge|api"},
+		"",
+	)
+
+	content := buildRawIncidentContent(inc)
+
+	if !strings.Contains(content, "| Incident ID | PD\\|777 |") {
+		t.Fatalf("incident id cell was not escaped: %q", content)
+	}
+	if !strings.Contains(content, "edge\\|api") {
+		t.Fatalf("tags cell was not escaped: %q", content)
+	}
+	if !strings.Contains(content, "checkout\\|api") {
+		t.Fatalf("affected services cell was not escaped: %q", content)
+	}
+}
+
+func TestIncidentTimeSummary(t *testing.T) {
+	start := time.Date(2026, 6, 2, 10, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name    string
+		end     *time.Time
+		wantEnd string
+		wantDur string
+	}{
+		{name: "open incident", end: nil, wantEnd: "Still open", wantDur: "Ongoing"},
+		{name: "short incident", end: timePtr(start.Add(30 * time.Second)), wantEnd: start.Add(30 * time.Second).Format(incidentTimeLayout), wantDur: "<1 minute"},
+		{name: "minutes incident", end: timePtr(start.Add(15 * time.Minute)), wantEnd: start.Add(15 * time.Minute).Format(incidentTimeLayout), wantDur: "~15 minutes"},
+		{name: "hours incident", end: timePtr(start.Add(2*time.Hour + 5*time.Minute)), wantEnd: start.Add(2*time.Hour + 5*time.Minute).Format(incidentTimeLayout), wantDur: "~2h 5m"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inc := modelIncidentForTest("PD-1", "summary", &start, tt.end, nil, nil, "")
+			_, gotEnd, gotDur := incidentTimeSummary(inc)
+			if gotEnd != tt.wantEnd {
+				t.Fatalf("end mismatch: got %q want %q", gotEnd, tt.wantEnd)
+			}
+			if gotDur != tt.wantDur {
+				t.Fatalf("duration mismatch: got %q want %q", gotDur, tt.wantDur)
+			}
+		})
+	}
+}
+
+func TestCloseIncidentUsesResolutionTimestampAsEndWhenEndIsBlank(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "incident.md")
+	content := strings.Join([]string{
+		"# Incident PD-123",
+		"",
+		"**Start:** 2026-06-02 10:00:00 UTC",
+		"**End:** Still open",
+		"",
+		"---",
+		"",
+		"Body",
+	}, "\n")
+
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("WriteFile() setup failed: %v", err)
+	}
+
+	if _, err := closeIncident(path, nil, "Applied mitigation"); err != nil {
+		t.Fatalf("closeIncident() failed: %v", err)
+	}
+
+	updated, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() failed: %v", err)
+	}
+	text := string(updated)
+
+	endLine := lineWithPrefix(text, "**End:** ")
+	if endLine == "" {
+		t.Fatalf("missing End header in updated content: %q", text)
+	}
+	resolvedLine := lineWithPrefix(text, "**Resolved:** ")
+	if resolvedLine == "" {
+		t.Fatalf("missing Resolved line in updated content: %q", text)
+	}
+
+	endValue := strings.TrimPrefix(endLine, "**End:** ")
+	resolvedValue := strings.TrimPrefix(resolvedLine, "**Resolved:** ")
+	if endValue != resolvedValue {
+		t.Fatalf("expected end time to match resolution timestamp, got end=%q resolved=%q", endValue, resolvedValue)
+	}
+}
+
+func TestCloseIncidentBlankEndAndNoResolutionSetsEndOnly(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "incident.md")
+	content := strings.Join([]string{
+		"# Incident PD-123",
+		"",
+		"**Start:** 2026-06-02 10:00:00 UTC",
+		"**End:** Still open",
+		"",
+		"---",
+		"",
+		"Body",
+	}, "\n")
+
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("WriteFile() setup failed: %v", err)
+	}
+
+	if _, err := closeIncident(path, nil, ""); err != nil {
+		t.Fatalf("closeIncident() failed: %v", err)
+	}
+
+	updated, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() failed: %v", err)
+	}
+	text := string(updated)
+
+	if strings.Contains(text, "**End:** Still open") {
+		t.Fatalf("expected end time to be set, still open found: %q", text)
+	}
+	if strings.Contains(text, "## Resolution") {
+		t.Fatalf("did not expect resolution section when resolution is empty: %q", text)
+	}
+}
+
+func lineWithPrefix(content, prefix string) string {
+	for _, line := range strings.Split(content, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return line
+		}
+	}
+	return ""
+}
+
+func modelIncidentForTest(id, summary string, start, end *time.Time, affectedServices, tags []string, resolution string) model.Incident {
+	return model.Incident{
+		PagerDutyID:      id,
+		Summary:          summary,
+		StartTime:        start,
+		EndTime:          end,
+		AffectedServices: affectedServices,
+		Tags:             tags,
+		Resolution:       resolution,
+	}
+}
+
+func timePtr(t time.Time) *time.Time {
+	return &t
 }
