@@ -271,20 +271,21 @@ func buildIncidentContent(inc model.Incident, rawMode bool) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("claude enrichment: %w", err)
 	}
-	return buildEnrichedIncidentContent(content), nil
+	return buildEnrichedIncidentContent(inc, content), nil
 }
 
-func buildEnrichedIncidentContent(content string) string {
+func buildEnrichedIncidentContent(inc model.Incident, content string) string {
+	rawSection := buildOriginalRawInputSection(inc)
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" {
-		return aiEnrichedHeader
+		return strings.TrimSpace(rawSection + "\n\n" + aiEnrichedHeader)
 	}
 
 	if strings.HasPrefix(trimmed, aiEnrichedHeader) {
-		return trimmed
+		return strings.TrimSpace(rawSection + "\n\n" + trimmed)
 	}
 
-	return aiEnrichedHeader + "\n\n" + trimmed
+	return strings.TrimSpace(rawSection + "\n\n" + aiEnrichedHeader + "\n\n" + trimmed)
 }
 
 func buildRawIncidentContent(inc model.Incident) string {
@@ -335,6 +336,50 @@ func buildRawIncidentContent(inc model.Incident) string {
 		sb.WriteString(strings.TrimSpace(inc.Resolution) + "\n")
 	}
 
+	return sb.String()
+}
+
+func buildOriginalRawInputSection(inc model.Incident) string {
+	summary := strings.TrimSpace(inc.Summary)
+	if summary == "" {
+		summary = "N/A"
+	}
+
+	affectedServices := "N/A"
+	if len(inc.AffectedServices) > 0 {
+		affectedServices = strings.Join(inc.AffectedServices, ", ")
+	}
+
+	tags := "N/A"
+	if len(inc.Tags) > 0 {
+		tags = strings.Join(inc.Tags, ", ")
+	}
+
+	resolution := strings.TrimSpace(inc.Resolution)
+	if resolution == "" {
+		resolution = "N/A"
+	}
+
+	start := "N/A"
+	if inc.StartTime != nil {
+		start = inc.StartTime.Format(incidentTimeLayout)
+	}
+
+	end := "Still open"
+	if inc.EndTime != nil {
+		end = inc.EndTime.Format(incidentTimeLayout)
+	}
+
+	var sb strings.Builder
+	sb.WriteString("## Original Raw Input\n\n")
+	sb.WriteString("```text\n")
+	sb.WriteString("Summary: " + summary + "\n")
+	sb.WriteString("Start Time: " + start + "\n")
+	sb.WriteString("End Time: " + end + "\n")
+	sb.WriteString("Affected Services: " + affectedServices + "\n")
+	sb.WriteString("Tags: " + tags + "\n")
+	sb.WriteString("Resolution: " + resolution + "\n")
+	sb.WriteString("```")
 	return sb.String()
 }
 

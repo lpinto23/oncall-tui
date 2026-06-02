@@ -290,7 +290,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.moveNext()
 			}
 
-		case "right":
+		case "r", "R", "e", "E", "left", "right":
+			if m.step == stepConfirm && canSelectOutputMode(m.opts) {
+				if newRawMode, changed := applyModeSelection(m.opts.RawMode, msg.String()); changed {
+					m.opts.RawMode = newRawMode
+					return m, nil
+				}
+			}
+
+			if msg.String() != "right" {
+				break
+			}
+
 			switch m.step {
 			case stepCloseOnly:
 				if m.endInput.Value() == "" {
@@ -763,7 +774,11 @@ func (m Model) renderConfirm(b *strings.Builder) {
 	}
 
 	action := confirmActionLabel(m.opts)
-	b.WriteString("\n" + hintStyle.Render("Press enter to "+action+"  •  esc to quit") + "\n")
+	hint := "Press enter to " + action + "  •  esc to quit"
+	if canSelectOutputMode(m.opts) {
+		hint = "Press [R] raw or [E] enriched  •  enter to " + action + "  •  esc to quit"
+	}
+	b.WriteString("\n" + hintStyle.Render(hint) + "\n")
 }
 
 func (m Model) renderProcessing(b *strings.Builder) {
@@ -798,6 +813,27 @@ func modeLabel(rawMode bool) string {
 		return "Raw (no LLM)"
 	}
 	return "Enriched (Claude)"
+}
+
+func canSelectOutputMode(opts Options) bool {
+	return !opts.ModeLocked && !opts.CloseMode && !opts.ResolutionMode
+}
+
+func applyModeSelection(rawMode bool, key string) (bool, bool) {
+	switch key {
+	case "r", "R", "left":
+		if rawMode {
+			return rawMode, false
+		}
+		return true, true
+	case "e", "E", "right":
+		if !rawMode {
+			return rawMode, false
+		}
+		return false, true
+	default:
+		return rawMode, false
+	}
 }
 
 func parseSetupMode(raw, placeholder string) (string, error) {

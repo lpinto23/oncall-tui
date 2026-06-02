@@ -232,11 +232,29 @@ func TestBuildIncidentContentRawMode(t *testing.T) {
 }
 
 func TestBuildEnrichedIncidentContent(t *testing.T) {
+	start := time.Date(2026, 6, 2, 10, 0, 0, 0, time.UTC)
+	end := start.Add(10 * time.Minute)
+	inc := modelIncidentForTest(
+		"PD-900",
+		"Checkout latency spike",
+		&start,
+		&end,
+		[]string{"checkout-api", "postgres"},
+		[]string{"latency", "p1"},
+		"Rolled back deployment",
+	)
+
 	t.Run("adds enrichment header once", func(t *testing.T) {
 		input := "Incident summary\n\n## Description\n\ncontent"
-		got := buildEnrichedIncidentContent(input)
-		if !strings.HasPrefix(got, aiEnrichedHeader+"\n\n") {
-			t.Fatalf("missing enrichment header: %q", got)
+		got := buildEnrichedIncidentContent(inc, input)
+		if !strings.HasPrefix(got, "## Original Raw Input\n\n```text\n") {
+			t.Fatalf("missing raw input section header: %q", got)
+		}
+		if !strings.Contains(got, "Summary: Checkout latency spike") {
+			t.Fatalf("raw input section should preserve summary: %q", got)
+		}
+		if !strings.Contains(got, "\n\n"+aiEnrichedHeader+"\n\n") {
+			t.Fatalf("missing enrichment header after raw section: %q", got)
 		}
 		if strings.Count(got, aiEnrichedHeader) != 1 {
 			t.Fatalf("expected single enrichment header: %q", got)
@@ -245,9 +263,12 @@ func TestBuildEnrichedIncidentContent(t *testing.T) {
 
 	t.Run("keeps existing header", func(t *testing.T) {
 		input := aiEnrichedHeader + "\n\nAlready enriched"
-		got := buildEnrichedIncidentContent(input)
-		if got != input {
-			t.Fatalf("expected unchanged content when header already exists")
+		got := buildEnrichedIncidentContent(inc, input)
+		if strings.Count(got, aiEnrichedHeader) != 1 {
+			t.Fatalf("expected single enrichment header when input already has one")
+		}
+		if !strings.Contains(got, "Already enriched") {
+			t.Fatalf("expected enriched content to be preserved")
 		}
 	})
 }
