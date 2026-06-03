@@ -109,6 +109,46 @@ func TestStripPlaceholderPrefix(t *testing.T) {
 	}
 }
 
+func TestParseIncidentID(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "plain id", in: "PD-367110", want: "PD-367110"},
+		{name: "trim spaces", in: "  PD-367110  ", want: "PD-367110"},
+		{name: "removes placeholder prefix", in: "e.g. PD-367110", want: "PD-367110"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseIncidentID(tt.in)
+			if got != tt.want {
+				t.Fatalf("parseIncidentID(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWriteIncidentFileNameFormat(t *testing.T) {
+	dir := t.TempDir()
+	start := time.Date(2026, 6, 3, 19, 1, 6, 0, time.UTC)
+	inc := modelIncidentForTest("PD-367110", "summary", &start, nil, nil, nil, "")
+
+	path, err := writeIncident(dir, inc, "## Description\n\ntext")
+	if err != nil {
+		t.Fatalf("writeIncident() error: %v", err)
+	}
+
+	base := filepath.Base(path)
+	if strings.HasPrefix(base, "INCIDENT_") {
+		t.Fatalf("filename should no longer use INCIDENT_ prefix: %q", base)
+	}
+	if !strings.HasSuffix(base, "_PD-367110.md") {
+		t.Fatalf("filename should end with incident id suffix: %q", base)
+	}
+}
+
 func TestSetHeaderEndTime(t *testing.T) {
 	end := time.Date(2026, 6, 2, 12, 34, 56, 0, time.UTC)
 	endLine := "**End:** " + end.Format(incidentTimeLayout)

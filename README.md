@@ -174,7 +174,7 @@ Without explicit flags, you can switch mode on the confirm screen with `R` (raw)
 Files are saved as:
 
 ```
-INCIDENT_{PAGERDUTY_ID}_{YYYY-MM-DD-HH-MM-SS}.md
+{YYYY-MM-DD-HH-MM-SS}_{PAGERDUTY_ID}.md
 ```
 
 ### Resolved incident

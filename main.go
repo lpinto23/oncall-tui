@@ -69,7 +69,7 @@ func main() {
 	}
 
 	onSubmit := func(outputDir, existingFile string, answers [7]string, rawMode bool) (string, error) {
-		incidentID := strings.TrimSpace(answers[0])
+		incidentID := parseIncidentID(answers[0])
 		summary := strings.TrimSpace(answers[1])
 
 		// Resolution-only mode: append resolution section to existing file.
@@ -138,14 +138,13 @@ func parseAffectedServices(raw string) []string {
 	return parseCommaSeparated(raw)
 }
 
+func parseIncidentID(raw string) string {
+	return stripPlaceholderPrefix(strings.TrimSpace(raw))
+}
+
 func parseCommaSeparated(raw string) []string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return nil
-	}
-
-	raw = stripPlaceholderPrefix(raw)
-	if strings.TrimSpace(raw) == "" {
 		return nil
 	}
 
@@ -206,9 +205,9 @@ func writeIncident(outputDir string, inc model.Incident, enrichedContent string)
 		return "", fmt.Errorf("creating output dir: %w", err)
 	}
 
-	filename := fmt.Sprintf("INCIDENT_%s_%s.md",
-		sanitize(inc.PagerDutyID),
+	filename := fmt.Sprintf("%s_%s.md",
 		time.Now().Format("2006-01-02-15-04-05"),
+		sanitize(inc.PagerDutyID),
 	)
 	path := filepath.Join(outputDir, filename)
 

@@ -19,12 +19,12 @@ func FindByID(outputDir, incidentID string) (string, error) {
 		return "", err
 	}
 
-	needle := "INCIDENT_" + util.Sanitize(incidentID) + "_"
+	sanitizedID := util.Sanitize(incidentID)
 	var best string
 	var bestTime int64
 
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasPrefix(e.Name(), needle) {
+		if e.IsDir() || !matchesIncidentFileName(e.Name(), sanitizedID) {
 			continue
 		}
 		info, err := e.Info()
@@ -40,3 +40,9 @@ func FindByID(outputDir, incidentID string) (string, error) {
 	return best, nil
 }
 
+func matchesIncidentFileName(fileName, sanitizedID string) bool {
+	if strings.HasPrefix(fileName, "INCIDENT_"+sanitizedID+"_") {
+		return true
+	}
+	return strings.HasSuffix(fileName, "_"+sanitizedID+".md")
+}
