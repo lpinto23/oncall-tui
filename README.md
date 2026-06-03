@@ -105,9 +105,9 @@ Prompts for an end time (defaults to now) and an optional resolution. Updates `*
 On the first run you will be prompted for:
 
 1. where incident files are saved (default: `~/oncall-incidents`)
-2. the default report mode (`enriched` or `raw`)
+2. the default report mode (`enriched` or `raw`) via a selection list
 
-Press `→` to accept placeholders, or type your own values.
+Press `→` to accept directory placeholders, and use `←/→` or `R`/`E` to pick the default mode.
 Both choices are saved to `~/.config/oncall-tui/config.json` and used on subsequent runs.
 
 ![Setup screen](docs/screenshots/setup.gif)
@@ -160,6 +160,7 @@ Without explicit flags, you can switch mode on the confirm screen with `R` (raw)
 | `Enter` | Advance to next step / insert newline in multiline fields |
 | `Ctrl+D` | Finish a multiline field and advance |
 | `→` | Accept the placeholder value for the current field |
+| `←` / `→` | Select mode in setup/confirm mode selectors |
 | `R` | Select raw mode on confirm step |
 | `E` | Select enriched mode on confirm step |
 | `Tab` / `↓` | Move to next field |

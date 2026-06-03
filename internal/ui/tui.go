@@ -92,12 +92,12 @@ type Options struct {
 //   - shortInputs: single-line textinput for ID, start, end, affected services, tags
 //   - longInputs:  textarea for summary and resolution
 type Model struct {
-	step      step
-	setupStep int // 0=output dir, 1=default mode
-	closeStep int // 0=end time, 1=resolution (used only in stepCloseOnly)
+	step           step
+	setupStep      int // 0=output dir, 1=default mode
+	setupModeIndex int
+	closeStep      int // 0=end time, 1=resolution (used only in stepCloseOnly)
 
-	setupInput     textinput.Model
-	setupModeInput textinput.Model
+	setupInput textinput.Model
 
 	// single-line fields
 	idInput               textinput.Model
@@ -140,8 +140,7 @@ func newTextinput(placeholder string) textinput.Model {
 
 func New(cfg config.Config, isFirstRun bool, opts Options, onSubmit func(outputDir, existingFile string, answers [7]string, rawMode bool) (string, error)) Model {
 	setup := newTextinput(cfg.OutputDir)
-	setupModeInput := newTextinput(config.ModeEnriched)
-	setupModeInput.SetValue(config.NormalizeMode(cfg.DefaultMode))
+	setupModeIndex := modeIndexFromValue(config.NormalizeMode(cfg.DefaultMode))
 
 	idInput := newTextinput("e.g. PD-12345")
 	now := time.Now().Format("2006-01-02 15:04")
@@ -184,8 +183,8 @@ func New(cfg config.Config, isFirstRun bool, opts Options, onSubmit func(outputD
 	return Model{
 		step:                  firstStep,
 		setupStep:             0,
+		setupModeIndex:        setupModeIndex,
 		setupInput:            setup,
-		setupModeInput:        setupModeInput,
 		idInput:               idInput,
 		startInput:            startInput,
 		endInput:              endInput,
@@ -291,6 +290,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "r", "R", "e", "E", "left", "right":
+			if m.step == stepSetup && m.setupStep == 1 {
+				if msg.String() == "left" {
+					if m.setupModeIndex > 0 {
+						m.setupModeIndex--
+					}
+					return m, nil
+				}
+				if msg.String() == "right" {
+					if m.setupModeIndex < len(setupModes)-1 {
+						m.setupModeIndex++
+					}
+					return m, nil
+				}
+				if msg.String() == "r" || msg.String() == "R" {
+					m.setupModeIndex = modeIndexFromValue(config.ModeRaw)
+					return m, nil
+				}
+				if msg.String() == "e" || msg.String() == "E" {
+					m.setupModeIndex = modeIndexFromValue(config.ModeEnriched)
+					return m, nil
+				}
+			}
+
 			if m.step == stepConfirm && canSelectOutputMode(m.opts) {
 				if newRawMode, changed := applyModeSelection(m.opts.RawMode, msg.String()); changed {
 					m.opts.RawMode = newRawMode
@@ -312,10 +334,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.setupInput.Value() == "" {
 						m.setupInput.SetValue(m.setupInput.Placeholder)
 					}
-				} else {
-					if m.setupModeInput.Value() == "" {
-						m.setupModeInput.SetValue(m.setupModeInput.Placeholder)
-					}
+				} else if m.setupModeIndex < len(setupModes)-1 {
+					m.setupModeIndex++
 				}
 			case stepIncidentID:
 				if m.idInput.Value() == "" {
@@ -350,8 +370,6 @@ func (m Model) updateActiveInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case stepSetup:
 		if m.setupStep == 0 {
 			m.setupInput, cmd = m.setupInput.Update(msg)
-		} else {
-			m.setupModeInput, cmd = m.setupModeInput.Update(msg)
 		}
 	case stepIncidentID:
 		m.idInput, cmd = m.idInput.Update(msg)
@@ -411,15 +429,10 @@ func (m Model) handleEnter() (tea.Model, tea.Cmd) {
 			m.cfg.OutputDir = dir
 			m.setupInput.Blur()
 			m.setupStep = 1
-			return m, m.setupModeInput.Focus()
-		}
-
-		mode, err := parseSetupMode(m.setupModeInput.Value(), m.setupModeInput.Placeholder)
-		if err != nil {
-			m.result = SubmitResult{Err: err}
-			m.step = stepError
 			return m, nil
 		}
+
+		mode := modeValueFromIndex(m.setupModeIndex)
 
 		m.cfg.OutputDir = dir
 		m.cfg.DefaultMode = mode
@@ -603,15 +616,15 @@ func (m Model) renderSetup(b *strings.Builder) {
 	if m.setupStep == 0 {
 		b.WriteString(labelStyle.Render("> Output Directory") + "\n")
 		b.WriteString(fieldStyle.Render(m.setupInput.View()) + "\n")
-		b.WriteString(dimStyle.Render("  Default Mode: "+config.NormalizeMode(m.setupModeInput.Value())) + "\n")
+		b.WriteString(dimStyle.Render("  Default Mode: "+modeValueFromIndex(m.setupModeIndex)) + "\n")
 		b.WriteString(hintStyle.Render("enter: next  •  →: accept placeholder  •  esc: quit") + "\n")
 		return
 	}
 
 	b.WriteString(dimStyle.Render("  Output Directory: "+orDash(m.cfg.OutputDir)) + "\n\n")
-	b.WriteString(labelStyle.Render("> Default Mode") + " " + hintStyle.Render("(raw or enriched)") + "\n")
-	b.WriteString(fieldStyle.Render(m.setupModeInput.View()) + "\n")
-	b.WriteString(hintStyle.Render("enter: save setup  •  →: accept placeholder  •  esc: quit") + "\n")
+	b.WriteString(labelStyle.Render("> Default Mode") + " " + hintStyle.Render("(use left/right, r/e)") + "\n")
+	b.WriteString(renderSetupModeSelector(m.setupModeIndex) + "\n")
+	b.WriteString(hintStyle.Render("enter: save setup  •  left/right or r/e: select  •  esc: quit") + "\n")
 }
 
 func (m Model) renderCloseOnly(b *strings.Builder) {
@@ -836,15 +849,38 @@ func applyModeSelection(rawMode bool, key string) (bool, bool) {
 	}
 }
 
-func parseSetupMode(raw, placeholder string) (string, error) {
-	mode := strings.TrimSpace(raw)
-	if mode == "" {
-		mode = strings.TrimSpace(placeholder)
+var (
+	setupModes      = []string{config.ModeEnriched, config.ModeRaw}
+	setupModeLabels = []string{"Enriched", "Raw"}
+)
+
+func modeIndexFromValue(mode string) int {
+	normalized := config.NormalizeMode(mode)
+	for i, v := range setupModes {
+		if v == normalized {
+			return i
+		}
 	}
-	if !config.IsValidMode(mode) {
-		return "", fmt.Errorf("invalid default mode %q (expected raw or enriched)", mode)
+	return 0
+}
+
+func modeValueFromIndex(idx int) string {
+	if idx < 0 || idx >= len(setupModes) {
+		return config.ModeEnriched
 	}
-	return config.NormalizeMode(mode), nil
+	return setupModes[idx]
+}
+
+func renderSetupModeSelector(selected int) string {
+	var options []string
+	for i, label := range setupModeLabels {
+		if i == selected {
+			options = append(options, labelStyle.Render("["+label+"]"))
+		} else {
+			options = append(options, dimStyle.Render(label))
+		}
+	}
+	return strings.Join(options, "   ")
 }
 
 func (m Model) renderDone(b *strings.Builder) {

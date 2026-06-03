@@ -139,9 +139,16 @@ func parseAffectedServices(raw string) []string {
 }
 
 func parseCommaSeparated(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+
+	raw = stripPlaceholderPrefix(raw)
 	if strings.TrimSpace(raw) == "" {
 		return nil
 	}
+
 	parts := strings.Split(raw, ",")
 	tags := make([]string, 0, len(parts))
 	for _, p := range parts {
@@ -151,6 +158,18 @@ func parseCommaSeparated(raw string) []string {
 		}
 	}
 	return tags
+}
+
+func stripPlaceholderPrefix(raw string) string {
+	raw = strings.TrimSpace(raw)
+	const prefix = "e.g."
+	if strings.HasPrefix(strings.ToLower(raw), prefix) {
+		trimmed := strings.TrimSpace(raw[len(prefix):])
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return raw
 }
 
 func incidentBody(inc model.Incident, enrichedContent string) string {

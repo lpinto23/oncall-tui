@@ -87,6 +87,28 @@ func TestParseAffectedServices(t *testing.T) {
 	}
 }
 
+func TestStripPlaceholderPrefix(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "removes lowercase eg", in: "e.g. PD-367110", want: "PD-367110"},
+		{name: "removes mixed case eg", in: "E.G. PD-367110", want: "PD-367110"},
+		{name: "keeps plain value", in: "PD-367110", want: "PD-367110"},
+		{name: "keeps empty after eg", in: "e.g.", want: "e.g."},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := stripPlaceholderPrefix(tt.in)
+			if got != tt.want {
+				t.Fatalf("stripPlaceholderPrefix(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSetHeaderEndTime(t *testing.T) {
 	end := time.Date(2026, 6, 2, 12, 34, 56, 0, time.UTC)
 	endLine := "**End:** " + end.Format(incidentTimeLayout)

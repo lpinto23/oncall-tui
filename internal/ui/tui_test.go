@@ -1,38 +1,62 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/lpinto23/oncall-tui/internal/config"
 )
 
-func TestParseSetupMode(t *testing.T) {
+func TestModeIndexFromValue(t *testing.T) {
 	tests := []struct {
-		name        string
-		raw         string
-		placeholder string
-		want        string
-		wantErr     bool
+		name string
+		mode string
+		want int
 	}{
-		{name: "explicit raw", raw: "raw", placeholder: config.ModeEnriched, want: config.ModeRaw, wantErr: false},
-		{name: "explicit enriched", raw: "enriched", placeholder: config.ModeRaw, want: config.ModeEnriched, wantErr: false},
-		{name: "empty uses placeholder", raw: "", placeholder: config.ModeRaw, want: config.ModeRaw, wantErr: false},
-		{name: "invalid", raw: "llm", placeholder: config.ModeEnriched, wantErr: true},
+		{name: "raw", mode: config.ModeRaw, want: 1},
+		{name: "enriched", mode: config.ModeEnriched, want: 0},
+		{name: "invalid defaults", mode: "llm", want: 0},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseSetupMode(tt.raw, tt.placeholder)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("parseSetupMode() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if tt.wantErr {
-				return
-			}
+			got := modeIndexFromValue(tt.mode)
 			if got != tt.want {
-				t.Fatalf("parseSetupMode() = %q, want %q", got, tt.want)
+				t.Fatalf("modeIndexFromValue() = %d, want %d", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestModeValueFromIndex(t *testing.T) {
+	tests := []struct {
+		name string
+		idx  int
+		want string
+	}{
+		{name: "enriched", idx: 0, want: config.ModeEnriched},
+		{name: "raw", idx: 1, want: config.ModeRaw},
+		{name: "negative defaults", idx: -1, want: config.ModeEnriched},
+		{name: "overflow defaults", idx: 99, want: config.ModeEnriched},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := modeValueFromIndex(tt.idx)
+			if got != tt.want {
+				t.Fatalf("modeValueFromIndex() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRenderSetupModeSelector(t *testing.T) {
+	got := renderSetupModeSelector(1)
+	if !strings.Contains(got, "Raw") {
+		t.Fatalf("selector should include Raw option: %q", got)
+	}
+	if !strings.Contains(got, "Enriched") {
+		t.Fatalf("selector should include Enriched option: %q", got)
 	}
 }
 
